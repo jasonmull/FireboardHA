@@ -63,7 +63,7 @@ class FireboardCoordinator(DataUpdateCoordinator):
         except FireboardApiError as err:
             raise UpdateFailed(str(err)) from err
 
-        _LOGGER.warning("FireboardHA: fetched %d device(s): %s", len(devices), [d.get("uuid") for d in devices])
+        _LOGGER.warning("FireboardHA: fetched %d device(s): %s", len(devices), devices)
 
         channel_labels: dict[str, dict[int, str]] = {}
         temps: dict[str, dict[int, dict]] = {}
@@ -71,32 +71,46 @@ class FireboardCoordinator(DataUpdateCoordinator):
         for device in devices:
             uuid = device["uuid"]
 
-            # Channel label index built from device list (labels not in /temps.json)
-            # Try both known field names from the API
+            channels = device.get("channels", [])
+
+            # Channel label index
             channel_labels[uuid] = {
                 ch["channel"]: ch.get("label") or ch.get("channel_label", "")
-                for ch in device.get("channels", [])
+                for ch in channels
             }
 
-            # Fetch live readings from the dedicated temps endpoint.
-            # Isolated per-device: one failing device doesn't block the rest.
+            # Try /temps.json first; if empty fall back to temperature field
+            # embedded directly on each channel in the device list response.
             try:
                 raw_temps = await self._client.async_get_temps(uuid)
                 _LOGGER.warning(
                     "FireboardHA: temps for %s (%s): %s", device.get("title", uuid), uuid, raw_temps
                 )
+            except (aiohttp.ClientError, FireboardApiError) as err:
+                _LOGGER.warning(
+                    "Could not fetch temps for %s (%s): %s",
+                    device.get("title", uuid), uuid, err,
+                )
+                raw_temps = []
+
+            if raw_temps:
                 temps[uuid] = {
                     entry["channel"]: {
                         "temp": _to_fahrenheit(entry["temp"], entry["degreetype"]),
                     }
                     for entry in raw_temps
                 }
-            except (aiohttp.ClientError, FireboardApiError) as err:
-                _LOGGER.warning(
-                    "Could not fetch temps for %s (%s): %s",
-                    device.get("title", uuid), uuid, err,
-                )
-                temps[uuid] = {}
+            else:
+                # Fall back to temperature values embedded in channels[] on the device list.
+                # Assume device degreetype matches account setting; default to Fahrenheit.
+                device_degreetype = device.get("degreetype", DEGREETYPE_FAHRENHEIT)
+                temps[uuid] = {
+                    ch["channel"]: {
+                        "temp": _to_fahrenheit(ch["temperature"], device_degreetype),
+                    }
+                    for ch in channels
+                    if ch.get("temperature") is not None
+                }
 
         # Accumulate seen channels — never shrinks so entities persist
         # even when probes are temporarily unplugged.
