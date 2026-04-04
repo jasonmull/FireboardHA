@@ -95,14 +95,25 @@ class FireboardCoordinator(DataUpdateCoordinator):
                 )
                 temps[uuid] = {}
 
-        # Accumulate seen channels from previous data so entities are never removed.
+        # Accumulate seen channels from:
+        #   1. Previous data (never shrink)
+        #   2. The device's channel list from /devices.json (always populated,
+        #      even when no probe is actively reading)
+        #   3. Channels with active readings from /temps.json
+        # This ensures entities are created on first load even when probes
+        # are not currently sending readings.
         prev_seen: dict[str, set[int]] = (
             self.data["seen_channels"] if self.data else {}
         )
         seen_channels: dict[str, set[int]] = {}
         for device in devices:
             uuid = device["uuid"]
-            seen_channels[uuid] = prev_seen.get(uuid, set()) | set(temps[uuid].keys())
+            device_channels = {
+                ch["channel"] for ch in device.get("channels", [])
+            }
+            seen_channels[uuid] = (
+                prev_seen.get(uuid, set()) | device_channels | set(temps[uuid].keys())
+            )
 
         return {
             "devices": devices,
