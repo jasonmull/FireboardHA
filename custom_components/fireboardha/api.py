@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import aiohttp
 
-from .const import API_AUTH_URL, API_BASE_URL, API_DEVICES_PATH, API_TEMPS_PATH
+from .const import API_AUTH_URL, API_BASE_URL, API_DEVICES_PATH, API_USER_AGENT
 
 
 class FireboardApiError(Exception):
@@ -26,6 +26,7 @@ async def async_get_token(
         async with session.post(
             API_AUTH_URL,
             json={"username": username, "password": password},
+            headers={"User-Agent": API_USER_AGENT},
         ) as resp:
             if resp.status == 400:
                 raise FireboardAuthError("Invalid username or password")
@@ -45,7 +46,10 @@ class FireboardApiClient:
 
     @property
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Token {self._token}"}
+        return {
+            "Authorization": f"Token {self._token}",
+            "User-Agent": API_USER_AGENT,
+        }
 
     async def async_get_devices(self) -> list[dict]:
         """Return all devices on the account, including channel labels."""
@@ -54,13 +58,3 @@ class FireboardApiClient:
             resp.raise_for_status()
             return await resp.json()
 
-    async def async_get_temps(self, uuid: str) -> list[dict]:
-        """Return latest temperature readings for a device.
-
-        Only returns channels with readings newer than 60 seconds.
-        An empty list means no probes are currently active.
-        """
-        url = f"{API_BASE_URL}{API_TEMPS_PATH.format(uuid=uuid)}"
-        async with self._session.get(url, headers=self._headers) as resp:
-            resp.raise_for_status()
-            return await resp.json()
