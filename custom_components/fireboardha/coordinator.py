@@ -79,38 +79,27 @@ class FireboardCoordinator(DataUpdateCoordinator):
                 for ch in channels
             }
 
-            # Try /temps.json first; if empty fall back to temperature field
-            # embedded directly on each channel in the device list response.
+            # /temps.json uses the integer device id, not the UUID.
+            device_id = device["id"]
             try:
-                raw_temps = await self._client.async_get_temps(uuid)
+                raw_temps = await self._client.async_get_temps(device_id)
                 _LOGGER.warning(
-                    "FireboardHA: temps for %s (%s): %s", device.get("title", uuid), uuid, raw_temps
+                    "FireboardHA: temps for %s (id=%s): %s",
+                    device.get("title", uuid), device_id, raw_temps,
                 )
             except (aiohttp.ClientError, FireboardApiError) as err:
                 _LOGGER.warning(
-                    "Could not fetch temps for %s (%s): %s",
-                    device.get("title", uuid), uuid, err,
+                    "Could not fetch temps for %s (id=%s): %s",
+                    device.get("title", uuid), device_id, err,
                 )
                 raw_temps = []
 
-            if raw_temps:
-                temps[uuid] = {
-                    entry["channel"]: {
-                        "temp": _to_fahrenheit(entry["temp"], entry["degreetype"]),
-                    }
-                    for entry in raw_temps
+            temps[uuid] = {
+                entry["channel"]: {
+                    "temp": _to_fahrenheit(entry["temp"], entry["degreetype"]),
                 }
-            else:
-                # Fall back to temperature values embedded in channels[] on the device list.
-                # Assume device degreetype matches account setting; default to Fahrenheit.
-                device_degreetype = device.get("degreetype", DEGREETYPE_FAHRENHEIT)
-                temps[uuid] = {
-                    ch["channel"]: {
-                        "temp": _to_fahrenheit(ch["temperature"], device_degreetype),
-                    }
-                    for ch in channels
-                    if ch.get("temperature") is not None
-                }
+                for entry in raw_temps
+            }
 
         # Accumulate seen channels — never shrinks so entities persist
         # even when probes are temporarily unplugged.
