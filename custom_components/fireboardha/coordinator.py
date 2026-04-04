@@ -63,7 +63,7 @@ class FireboardCoordinator(DataUpdateCoordinator):
         except FireboardApiError as err:
             raise UpdateFailed(str(err)) from err
 
-        _LOGGER.debug("Fireboard devices response: %s", devices)
+        _LOGGER.warning("FireboardHA: fetched %d device(s): %s", len(devices), [d.get("uuid") for d in devices])
 
         channel_labels: dict[str, dict[int, str]] = {}
         temps: dict[str, dict[int, dict]] = {}
@@ -72,8 +72,9 @@ class FireboardCoordinator(DataUpdateCoordinator):
             uuid = device["uuid"]
 
             # Channel label index built from device list (labels not in /temps.json)
+            # Try both known field names from the API
             channel_labels[uuid] = {
-                ch["channel"]: ch.get("channel_label", "")
+                ch["channel"]: ch.get("label") or ch.get("channel_label", "")
                 for ch in device.get("channels", [])
             }
 
@@ -81,8 +82,8 @@ class FireboardCoordinator(DataUpdateCoordinator):
             # Isolated per-device: one failing device doesn't block the rest.
             try:
                 raw_temps = await self._client.async_get_temps(uuid)
-                _LOGGER.debug(
-                    "Temps for %s (%s): %s", device.get("title", uuid), uuid, raw_temps
+                _LOGGER.warning(
+                    "FireboardHA: temps for %s (%s): %s", device.get("title", uuid), uuid, raw_temps
                 )
                 temps[uuid] = {
                     entry["channel"]: {

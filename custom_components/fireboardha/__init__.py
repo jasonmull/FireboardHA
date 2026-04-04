@@ -19,6 +19,7 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up FireboardHA from a config entry."""
+    _LOGGER.warning("FireboardHA: setting up entry %s", entry.entry_id)
     session = async_get_clientsession(hass)
     client = FireboardApiClient(session, entry.data[CONF_TOKEN])
     coordinator = FireboardCoordinator(hass, client)
