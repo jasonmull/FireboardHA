@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import aiohttp
 
-from .const import API_AUTH_URL, API_BASE_URL, API_DEVICES_PATH, API_USER_AGENT
+from .const import API_AUTH_URL, API_BASE_URL, API_DEVICES_PATH, API_TEMPS_PATH, API_USER_AGENT
 
 
 class FireboardApiError(Exception):
@@ -54,6 +54,17 @@ class FireboardApiClient:
     async def async_get_devices(self) -> list[dict]:
         """Return all devices on the account, including channel labels."""
         url = f"{API_BASE_URL}{API_DEVICES_PATH}"
+        async with self._session.get(url, headers=self._headers) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def async_get_temps(self, uuid: str) -> list[dict]:
+        """Return latest temperature readings for a device.
+
+        Only returns channels with readings newer than 60 seconds.
+        Returns an empty list when no probes are currently active.
+        """
+        url = f"{API_BASE_URL}{API_TEMPS_PATH.format(uuid=uuid)}"
         async with self._session.get(url, headers=self._headers) as resp:
             resp.raise_for_status()
             return await resp.json()

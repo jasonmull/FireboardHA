@@ -55,12 +55,7 @@ class FireboardCoordinator(DataUpdateCoordinator):
         self._client = client
 
     async def _async_update_data(self) -> dict:
-        """Fetch latest data from the Fireboard API.
-
-        Uses a single GET /devices.json call which includes both channel
-        metadata and latest_temps in one response, keeping well within the
-        17-calls-per-5-minute rate limit regardless of device count.
-        """
+        """Fetch latest data from the Fireboard API."""
         try:
             devices = await self._client.async_get_devices()
         except aiohttp.ClientError as err:
@@ -68,32 +63,42 @@ class FireboardCoordinator(DataUpdateCoordinator):
         except FireboardApiError as err:
             raise UpdateFailed(str(err)) from err
 
+        _LOGGER.debug("Fireboard devices response: %s", devices)
+
         channel_labels: dict[str, dict[int, str]] = {}
         temps: dict[str, dict[int, dict]] = {}
 
         for device in devices:
             uuid = device["uuid"]
 
-            # Channel label index: {channel_num: label}
-            # Field name confirmed from API docs: "channel_label"
+            # Channel label index built from device list (labels not in /temps.json)
             channel_labels[uuid] = {
                 ch["channel"]: ch.get("channel_label", "")
                 for ch in device.get("channels", [])
             }
 
-            # latest_temps is included in the /devices.json response —
-            # no extra per-device API call needed.
-            temps[uuid] = {
-                entry["channel"]: {
-                    "temp": _to_fahrenheit(entry["temp"], entry["degreetype"]),
+            # Fetch live readings from the dedicated temps endpoint.
+            # Isolated per-device: one failing device doesn't block the rest.
+            try:
+                raw_temps = await self._client.async_get_temps(uuid)
+                _LOGGER.debug(
+                    "Temps for %s (%s): %s", device.get("title", uuid), uuid, raw_temps
+                )
+                temps[uuid] = {
+                    entry["channel"]: {
+                        "temp": _to_fahrenheit(entry["temp"], entry["degreetype"]),
+                    }
+                    for entry in raw_temps
                 }
-                for entry in device.get("latest_temps", [])
-            }
+            except (aiohttp.ClientError, FireboardApiError) as err:
+                _LOGGER.warning(
+                    "Could not fetch temps for %s (%s): %s",
+                    device.get("title", uuid), uuid, err,
+                )
+                temps[uuid] = {}
 
-        # Accumulate seen channels from:
-        #   1. Previous data (never shrink — keeps entities for unplugged probes)
-        #   2. The device's channels[] list (always present, even with no readings)
-        #   3. Channels with active readings in latest_temps
+        # Accumulate seen channels — never shrinks so entities persist
+        # even when probes are temporarily unplugged.
         prev_seen: dict[str, set[int]] = (
             self.data["seen_channels"] if self.data else {}
         )
