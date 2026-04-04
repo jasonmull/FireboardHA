@@ -58,13 +58,13 @@ class FireboardApiClient:
             resp.raise_for_status()
             return await resp.json()
 
-    async def async_get_temps(self, device_id: int) -> list[dict]:
-        """Return latest temperature readings for a device.
+    async def async_get_temps(self, uuid: str) -> list[dict]:
+        """Return latest temperature readings for a device (UUID in path).
 
-        Uses the integer device id (not UUID) as required by the temps endpoint.
         Only returns channels with readings newer than 60 seconds.
+        Returns an empty list when no probes are currently active.
         """
-        url = f"{API_BASE_URL}{API_TEMPS_PATH.format(device_id=device_id)}"
+        url = f"{API_BASE_URL}{API_TEMPS_PATH.format(uuid=uuid)}"
         async with self._session.get(url, headers=self._headers) as resp:
             resp.raise_for_status()
             return await resp.json()

@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import FireboardApiClient, FireboardApiError
-from .const import DEGREETYPE_CELSIUS, DEGREETYPE_FAHRENHEIT, DOMAIN, UPDATE_INTERVAL_SECONDS
+from .const import DEGREETYPE_CELSIUS, DOMAIN, UPDATE_INTERVAL_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,23 +24,24 @@ def _to_fahrenheit(temp: float, degreetype: int) -> float:
 class FireboardCoordinator(DataUpdateCoordinator):
     """Coordinator that polls the Fireboard API for all devices and their temps.
 
+    Uses a single GET /devices.json call per poll which includes both channel
+    metadata and latest_temps. This keeps API usage to 120 calls/hour at the
+    30-second poll interval, well within the 200/hour rate limit even with
+    many devices.
+
     coordinator.data structure:
     {
         "devices": [<raw device dicts from API>],
         "channel_labels": {
             "<uuid>": {<channel_num>: "<label>", ...},
-            ...
         },
         "temps": {
             "<uuid>": {
-                <channel_num>: {"temp": <float °F>, "degreetype": <int>},
-                ...
+                <channel_num>: {"temp": <float °F>},
             },
-            ...
         },
         "seen_channels": {
             "<uuid>": {<channel_num>, ...},  # accumulated, never shrinks
-            ...
         },
     }
     """
@@ -63,43 +64,35 @@ class FireboardCoordinator(DataUpdateCoordinator):
         except FireboardApiError as err:
             raise UpdateFailed(str(err)) from err
 
-        _LOGGER.warning("FireboardHA: fetched %d device(s): %s", len(devices), devices)
-
         channel_labels: dict[str, dict[int, str]] = {}
         temps: dict[str, dict[int, dict]] = {}
 
         for device in devices:
             uuid = device["uuid"]
-
             channels = device.get("channels", [])
+            device_degreetype = device.get("degreetype", 2)  # 2 = Fahrenheit
 
-            # Channel label index
+            # Channel labels — confirmed field name from real API: channel_label
             channel_labels[uuid] = {
-                ch["channel"]: ch.get("label") or ch.get("channel_label", "")
+                ch["channel"]: ch.get("channel_label", "")
                 for ch in channels
             }
 
-            # /temps.json uses the integer device id, not the UUID.
-            device_id = device["id"]
-            try:
-                raw_temps = await self._client.async_get_temps(device_id)
-                _LOGGER.warning(
-                    "FireboardHA: temps for %s (id=%s): %s",
-                    device.get("title", uuid), device_id, raw_temps,
-                )
-            except (aiohttp.ClientError, FireboardApiError) as err:
-                _LOGGER.warning(
-                    "Could not fetch temps for %s (id=%s): %s",
-                    device.get("title", uuid), device_id, err,
-                )
-                raw_temps = []
-
+            # latest_temps is included in /devices.json. The API only populates
+            # it when readings are < 1 minute old — empty list means no fresh data.
+            # Polling at 30s catches readings as soon as the device pushes them.
             temps[uuid] = {
                 entry["channel"]: {
-                    "temp": _to_fahrenheit(entry["temp"], entry["degreetype"]),
+                    "temp": _to_fahrenheit(entry["temp"], entry.get("degreetype", device_degreetype)),
                 }
-                for entry in raw_temps
+                for entry in device.get("latest_temps", [])
             }
+            _LOGGER.debug(
+                "Device %s: %d channel(s), %d live reading(s)",
+                device.get("title", uuid),
+                len(channels),
+                len(temps[uuid]),
+            )
 
         # Accumulate seen channels — never shrinks so entities persist
         # even when probes are temporarily unplugged.
