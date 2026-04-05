@@ -7,15 +7,13 @@ MANUFACTURER = "Fireboard Labs"
 API_BASE_URL = "https://fireboard.io/api/v1"
 API_AUTH_URL = "https://fireboard.io/api/rest-auth/login/"
 API_DEVICES_PATH = "/devices.json"
-API_TEMPS_PATH = "/devices/{uuid}/temps.json"
-API_SESSION_CHART_PATH = "/sessions/{session_id}/chart.json"
 API_USER_AGENT = "FireboardHA Home Assistant Integration"
 
 # Config entry keys
 CONF_TOKEN = "token"
 
-# Polling — single /devices.json call + one chart call per active session
-# keeps well within the 17-calls-per-5-minute rate limit
+# Polling — single /devices.json call includes latest_temps, so 60s is
+# well within the 200 calls/hour and 17 calls/5-minute rate limits.
 UPDATE_INTERVAL_SECONDS = 60
 
 # Fireboard degreetype field values
