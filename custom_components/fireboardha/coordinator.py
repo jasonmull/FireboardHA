@@ -79,31 +79,28 @@ class FireboardCoordinator(DataUpdateCoordinator):
                     session_to_uuid[sid] = uuid
 
         # Fall back: fetch session chart data for any device that had no direct readings.
-        # The chart endpoint contains the full session history — we take the most recent
-        # reading per channel as the current temperature.
+        # Chart response structure per entry:
+        #   { "device": "<uuid>", "channel_id": <int>, "y": [...temps], "x": [...timestamps],
+        #     "degreetype": <int>, "label": "<str>", ... }
+        # The last element of y[] is the most recent temperature for that channel.
         for session_id, uuid in session_to_uuid.items():
             try:
                 chart = await self._client.async_get_session_chart(session_id)
-                _LOGGER.warning(
-                    "FireboardHA chart session %s (last 3 entries): %s",
-                    session_id,
-                    chart[-3:] if chart else [],
-                )
-                # chart is a list of readings sorted oldest→newest.
-                # Walk in reverse to find the most recent reading per channel.
-                latest: dict[int, dict] = {}
-                for entry in reversed(chart):
-                    ch = entry.get("channel") or entry.get("chan")
-                    if ch is not None and ch not in latest:
-                        latest[ch] = entry
-                    if len(latest) == len(channel_labels.get(uuid, {})):
-                        break  # found one reading per channel, stop scanning
-
-                temps[uuid] = {
-                    ch: {"temp": _to_fahrenheit(entry["temp"], entry.get("degreetype", 2))}
-                    for ch, entry in latest.items()
-                    if entry.get("temp") is not None
-                }
+                for entry in chart:
+                    device_uuid = entry.get("device")
+                    ch = entry.get("channel_id")
+                    y_vals = entry.get("y", [])
+                    degreetype = entry.get("degreetype", 2)
+                    if device_uuid and ch is not None and y_vals:
+                        if device_uuid not in temps:
+                            temps[device_uuid] = {}
+                        temps[device_uuid][ch] = {
+                            "temp": _to_fahrenheit(y_vals[-1], degreetype),
+                        }
+                        _LOGGER.warning(
+                            "FireboardHA chart %s ch%s: %.1f°F",
+                            entry.get("label", device_uuid), ch, temps[device_uuid][ch]["temp"],
+                        )
             except (aiohttp.ClientError, FireboardApiError) as err:
                 _LOGGER.warning("Could not fetch chart for session %s: %s", session_id, err)
 
