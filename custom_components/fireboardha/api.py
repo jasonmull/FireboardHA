@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import aiohttp
 
-from .const import API_AUTH_URL, API_BASE_URL, API_DEVICES_PATH, API_TEMPS_PATH, API_USER_AGENT
+from .const import API_AUTH_URL, API_BASE_URL, API_DEVICES_PATH, API_SESSION_CHART_PATH, API_TEMPS_PATH, API_USER_AGENT
 
 
 class FireboardApiError(Exception):
@@ -65,6 +65,16 @@ class FireboardApiClient:
         Returns an empty list when no probes are currently active.
         """
         url = f"{API_BASE_URL}{API_TEMPS_PATH.format(uuid=uuid)}"
+        async with self._session.get(url, headers=self._headers) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def async_get_session_chart(self, session_id: int) -> list[dict]:
+        """Return temperature chart data for an active session.
+
+        Returns a list of readings with temp, channel, and degreetype.
+        """
+        url = f"{API_BASE_URL}{API_SESSION_CHART_PATH.format(session_id=session_id)}"
         async with self._session.get(url, headers=self._headers) as resp:
             resp.raise_for_status()
             return await resp.json()

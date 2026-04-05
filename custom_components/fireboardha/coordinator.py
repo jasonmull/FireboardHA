@@ -45,6 +45,10 @@ class FireboardCoordinator(DataUpdateCoordinator):
         channel_labels: dict[str, dict[int, str]] = {}
         temps: dict[str, dict[int, dict]] = {}
 
+        # Collect the active session ID per device (use the first channel's sessionid).
+        # session_id -> uuid mapping so chart readings can be mapped back to a device.
+        session_to_uuid: dict[int, str] = {}
+
         for device in devices:
             uuid = device["uuid"]
             channels = device.get("channels", [])
@@ -54,26 +58,56 @@ class FireboardCoordinator(DataUpdateCoordinator):
                 for ch in channels
             }
 
+            # Prefer /temps.json — works if readings are < 1 minute old.
             try:
                 raw_temps = await self._client.async_get_temps(uuid)
-                _LOGGER.warning(
-                    "FireboardHA temps %s: %s",
-                    device.get("title", uuid),
-                    raw_temps,
-                )
+            except (aiohttp.ClientError, FireboardApiError) as err:
+                _LOGGER.warning("Could not fetch temps for %s: %s", device.get("title", uuid), err)
+                raw_temps = []
+
+            if raw_temps:
+                _LOGGER.warning("FireboardHA temps (direct) %s: %s", device.get("title", uuid), raw_temps)
                 temps[uuid] = {
-                    entry["channel"]: {
-                        "temp": _to_fahrenheit(entry["temp"], entry["degreetype"]),
-                    }
+                    entry["channel"]: {"temp": _to_fahrenheit(entry["temp"], entry["degreetype"])}
                     for entry in raw_temps
                 }
-            except (aiohttp.ClientError, FireboardApiError) as err:
-                _LOGGER.warning(
-                    "FireboardHA could not fetch temps for %s: %s",
-                    device.get("title", uuid), err,
-                )
+            else:
                 temps[uuid] = {}
+                # Record session ID so we can fall back to the chart endpoint.
+                session_ids = {ch["sessionid"] for ch in channels if ch.get("sessionid")}
+                for sid in session_ids:
+                    session_to_uuid[sid] = uuid
 
+        # Fall back: fetch session chart data for any device that had no direct readings.
+        # The chart endpoint contains the full session history — we take the most recent
+        # reading per channel as the current temperature.
+        for session_id, uuid in session_to_uuid.items():
+            try:
+                chart = await self._client.async_get_session_chart(session_id)
+                _LOGGER.warning(
+                    "FireboardHA chart session %s (last 3 entries): %s",
+                    session_id,
+                    chart[-3:] if chart else [],
+                )
+                # chart is a list of readings sorted oldest→newest.
+                # Walk in reverse to find the most recent reading per channel.
+                latest: dict[int, dict] = {}
+                for entry in reversed(chart):
+                    ch = entry.get("channel") or entry.get("chan")
+                    if ch is not None and ch not in latest:
+                        latest[ch] = entry
+                    if len(latest) == len(channel_labels.get(uuid, {})):
+                        break  # found one reading per channel, stop scanning
+
+                temps[uuid] = {
+                    ch: {"temp": _to_fahrenheit(entry["temp"], entry.get("degreetype", 2))}
+                    for ch, entry in latest.items()
+                    if entry.get("temp") is not None
+                }
+            except (aiohttp.ClientError, FireboardApiError) as err:
+                _LOGGER.warning("Could not fetch chart for session %s: %s", session_id, err)
+
+        # Accumulate seen channels — never shrinks.
         prev_seen: dict[str, set[int]] = (
             self.data["seen_channels"] if self.data else {}
         )
