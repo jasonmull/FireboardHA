@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 
 import aiohttp
@@ -66,7 +67,6 @@ class FireboardCoordinator(DataUpdateCoordinator):
                 raw_temps = []
 
             if raw_temps:
-                _LOGGER.warning("FireboardHA temps (direct) %s: %s", device.get("title", uuid), raw_temps)
                 temps[uuid] = {
                     entry["channel"]: {"temp": _to_fahrenheit(entry["temp"], entry["degreetype"])}
                     for entry in raw_temps
@@ -82,25 +82,38 @@ class FireboardCoordinator(DataUpdateCoordinator):
         # Chart response structure per entry:
         #   { "device": "<uuid>", "channel_id": <int>, "y": [...temps], "x": [...timestamps],
         #     "degreetype": <int>, "label": "<str>", ... }
-        # The last element of y[] is the most recent temperature for that channel.
-        for session_id, uuid in session_to_uuid.items():
+        # x[] contains Unix timestamps; y[] contains parallel temperature values.
+        # Only include the reading if the last timestamp is recent — the chart holds the
+        # full session history so unplugged probes still have old entries at the end.
+        now = time.time()
+        max_age = 5 * 60  # 5 minutes — treat older readings as unavailable
+
+        for session_id in session_to_uuid:
             try:
                 chart = await self._client.async_get_session_chart(session_id)
                 for entry in chart:
                     device_uuid = entry.get("device")
                     ch = entry.get("channel_id")
                     y_vals = entry.get("y", [])
+                    x_vals = entry.get("x", [])
                     degreetype = entry.get("degreetype", 2)
-                    if device_uuid and ch is not None and y_vals:
-                        if device_uuid not in temps:
-                            temps[device_uuid] = {}
-                        temps[device_uuid][ch] = {
-                            "temp": _to_fahrenheit(y_vals[-1], degreetype),
-                        }
-                        _LOGGER.warning(
-                            "FireboardHA chart %s ch%s: %.1f°F",
-                            entry.get("label", device_uuid), ch, temps[device_uuid][ch]["temp"],
+
+                    if not (device_uuid and ch is not None and y_vals and x_vals):
+                        continue
+
+                    age = now - x_vals[-1]
+                    if age > max_age:
+                        _LOGGER.debug(
+                            "Skipping stale reading for %s ch%s (%.0f min old)",
+                            entry.get("label", device_uuid), ch, age / 60,
                         )
+                        continue
+
+                    if device_uuid not in temps:
+                        temps[device_uuid] = {}
+                    temps[device_uuid][ch] = {
+                        "temp": _to_fahrenheit(y_vals[-1], degreetype),
+                    }
             except (aiohttp.ClientError, FireboardApiError) as err:
                 _LOGGER.warning("Could not fetch chart for session %s: %s", session_id, err)
 
